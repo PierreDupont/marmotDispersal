@@ -9,10 +9,6 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
  
-    
-```{r child = "C:/Users/pidu/OneDrive - Norwegian University of Life Sciences/PROJECTS/demo-rmd-snow-main/snow.Rmd"}
-``` 
-
 This vignette demonstrates the marmot dispersal capture-recapture model, as in
 "Estimation of age and sex-specific natal dispersal patterns of Alpine marmots from capture-recapture data." (Dupont *et al*, *submitted*).
 Specifically, we implement the two versions of the CR model used in the paper using nimble [@de2017programming].  
