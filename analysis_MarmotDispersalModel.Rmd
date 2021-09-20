@@ -1,0 +1,283 @@
+---
+title: "Alpine marmot Dispersal Model: Analysis"
+author: "Pierre Dupont"
+date: "12/09/2021"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Alpine marmot Dispersal Model: Analysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+This vignette demonstrates the marmot dispersal capture-recapture model, as in "Estimation of age and sex-specific natal dispersal patterns of Alpine marmots from capture-recapture data." (Dupont *et al*, *submitted*). Specifically, we implement the two versions of the CR model used in the paper using nimble.
+
+
+### Load libraries and data
+```{r packages, message=FALSE, warning=FALSE}
+rm(list = ls())
+library(nimble, quietly = T)
+library(jagsUI)
+load("marmotDispersal_Input.RData")
+```
+
+
+
+### Prepare JAGS data
+Now, we format the data for JAGS and prepare initial values.
+```{r data}
+## 1. JAGS data
+data <- list( y = y,
+             f = f,
+             nind = dim(y)[1],
+             n.occ = dim(y)[2],
+             dist = dist,
+             site = site, 
+             prob.mat = prob.mat,
+             dmax = dmax,
+             sex = sex,
+             age = age,
+             help = help,
+             A = max(na.omit(age)))
+
+## 2. Function to generate compatible initial values for z
+INITS <- function(CH,f,PSI.STATE,PSI.OBS){						
+  ##1.Model informations	
+  imax <- nrow(CH)				##number of individuals
+  tmax <- ncol(CH)				##number of occasions												
+  n.states <- dim(PSI.OBS)[2]		##number of states												
+  n.events <- dim(PSI.OBS)[3]		##number of events
+  
+  ##2.Read matrices function
+  get.states <- function(x,i){ 						##read matrix backwards and returns row number
+    res <- NULL
+    for (j in 1:nrow(x)){ 
+      if (x[j,i]!=0) 
+        res <- cbind(res,j)
+    }
+    return(res)
+  }
+  
+  get.next.state <- function (x,i){
+    res <- NULL
+    for (j in 1:ncol(x)){
+      if (x[i,j]!=0)
+        res <- cbind(res,j)
+    }
+    return(res)
+  }
+  
+  ##3.Sample the possible states
+  z <- matrix(NA,imax,tmax)						
+  for (i in (1:imax)){
+    #print(i)
+    E <- S <- TOT <- F <- T <- list(rep(NA,1))
+    E[[tmax]] <- S[[tmax]] <- TOT[[tmax]] <- get.states(PSI.OBS[i,,,tmax],CH[i,tmax])
+    z[i,f[i]] <- F[[f[i]]] <- T[[f[i]]] <- get.states(PSI.OBS[i,,,f[i]],CH[i,f[i]])	
+    
+    for (t in ((tmax-1):(f[i]))){
+      E[[t]] <- get.states(PSI.OBS[i,,,t],CH[i,t])
+      
+      X <- rep(NA,1)
+      for (x in 1:length(TOT[[t+1]])){
+        y <- get.states(PSI.STATE[i,,,t],TOT[[t+1]][x])
+        X <- c(X,y)
+      }
+      
+      S[[t]] <- unique(X)
+      TOT[[t]] <- intersect(S[[t]],E[[t]])
+    }
+    
+    for (t in ((f[i]+1):tmax)){
+      F[[t]] <- get.next.state(PSI.STATE[i,,,t],z[i,t-1])
+      T[[t]] <- intersect(F[[t]],TOT[[t]])
+      fstate <- sample (length(T[[t]]),1)
+      z[i,t] <- T[[t]][fstate]
+    }
+  }  
+  for (i in 1:nrow(z)){
+    fi <- z[i,f[i]]
+    z[i,1:f[i]] <- NA
+    z[i,f[i]] <- fi
+  }
+  return(z)
+}
+
+state.mat <- array(NA,c(dim(y)[1],4,4,dim(y)[2]))
+obs.mat <- array(NA,c(dim(y)[1],4,4,dim(y)[2]))
+disp <- matrix(NA,dim(y)[1],dim(y)[2])
+for (i in 1:dim(y)[1]){
+  for (t in f[i]:dim(y)[2]){ 
+    disp[i,t] <- ifelse(sum(prob.mat[site[i],,t]) <= 0, 0, 1)
+    state.mat[i,,,t] <- matrix(c(			#Transition matrix
+      1, 1, disp[i,t], 1, 
+      0, 1, 0, 1, 
+      0, 0, 1, 1, 
+      0, 0, 0, 1
+    ), nrow = 4, byrow = TRUE)    
+    obs.mat[i,,,t] <- matrix(c(			##Observation matrix	
+      1, 0, 0, 1, 
+      0, 1, 0, 1, 	
+      0, 0, 1, 1, 
+      0, 0, 0, 1                               
+    ), nrow = 4, byrow = TRUE)
+  }
+}
+jagsInits <- function(){list(z = INITS(y,f,state.mat,obs.mat))}
+
+## 3. Parameters monitored
+params_POIS <- c("PHIS",
+                 "PHILB",
+                 "DISP",
+                 "HERIT",
+                 "P",
+                 "d.P",
+                 "d.trois",
+                 "d.quatre",
+                 "tau")
+
+```
+
+
+### Define JAGS models
+Now, we define the Natal & Apparent Dispersal models in JAGS language.
+```{r JAGS models}
+sink("natalDispModel_AlpineMarmots.jags")
+cat("model {
+  # Priors and constraints
+  tauH ~ dgamma(0.01,0.01)I(0.00001,100)
+  tau[1] ~ dgamma(0.01,0.01)I(0.00001,100)
+  tau[2] ~ dgamma(0.01,0.01)I(0.00001,100)
+  
+  for (i in 1:nind){
+    help[i] ~ dpois(tauH)
+    dist[i] ~ dpois(tau[sex[i]])
+    DD[i] <- step(dmax -(dist[i]+1))
+    D[i] <- DD[i]+1
+    DIST[i,1] <- dmax
+    DIST[i,2] <- dist[i]+1
+    for (t in f[i]:(n.occ-1)){
+      phiS[i,t] <- mean.phiS[age[i,t],i]
+      phiDB[i,t] <- mean.phiDB[age[i,t],sex[i]] 
+      phiLB[i,t] <- mean.phiLB[age[i,t],sex[i]]  
+      d[i,t] <- mean.d[age[i,t],sex[i]]
+      h[i,t] <- mean.h[age[i,t],sex[i]]
+      p[i,t] <- mean.p[age[i,t+1],sex[i],t]
+      r[i,t] <- prob.mat[site[i],DIST[i,D[i]],t]
+    } 
+  }
+
+  for (a in 1:A){
+    PHIS[a,1] ~ dnorm(0,0.001)
+    PHIDB[a,1] ~ dnorm(0,0.001)
+    PHILB[a,1] ~ dnorm(0,0.001)
+    DISP[a,1] ~ dnorm(0,0.001)
+    HERIT[a,1] ~ dnorm(0,0.001)
+    PHIS[a,2] ~ dnorm(0,0.001)
+    PHIDB[a,2] ~ dnorm(0,0.001)
+    PHILB[a,2] ~ dnorm(0,0.001)
+    DISP[a,2] ~ dnorm(0,0.001)
+    HERIT[a,2] ~ dnorm(0,0.001)
+    logit(mean.phiDB[a,1]) <- PHIDB[a,1]
+    logit(mean.phiDB[a,2]) <- PHIDB[a,2]
+    logit(mean.phiLB[a,1]) <- PHILB[a,1]
+    logit(mean.phiLB[a,2]) <- PHILB[a,2]
+    logit(mean.d[a,1]) <- DISP[a,1]
+    logit(mean.d[a,2]) <- DISP[a,2]
+    logit(mean.h[a,1]) <- HERIT[a,1]
+    logit(mean.h[a,2]) <- HERIT[a,2]
+  }
+  
+    beta.H ~ dnorm(0,0.001)
+  for(i in 1:nind){
+    HELP[i] <- log(help[i]+1)
+    logit(mean.phiS[1,i]) <- PHIS[1,sex[i]] + beta.H*HELP[i]
+    for (a in 2:A){
+      logit(mean.phiS[a,i]) <- PHIS[a,sex[i]]
+    }
+  }
+  
+  for (t in 1:(n.occ-1)){
+    logit(mean.p[2,1,t]) <- P[t]
+    logit(mean.p[2,2,t]) <- P[t]+d.P
+    logit(mean.p[3,1,t]) <- P[t]+d.trois
+    logit(mean.p[3,2,t]) <- P[t]+d.P+d.trois
+    logit(mean.p[4,1,t]) <- P[t]+d.quatre
+    logit(mean.p[4,2,t]) <- P[t]+d.P+d.quatre
+    P[t] ~ dnorm(0,0.001)
+  }
+  d.trois ~ dnorm(0,0.001)
+  d.quatre ~ dnorm(0,0.001)
+  d.P ~ dnorm(0,0.001)
+  
+  # Define state-transition and observation matrices
+  for (i in 1:nind){
+    for (t in f[i]:(n.occ-1)){         
+      # Define probabilities of state S(t+1) given S(t)   
+      ps[1,i,t,1] <- phiS[i,t] * (1-d[i,t]) * (1-h[i,t]) 
+      ps[1,i,t,2] <- phiS[i,t] * (1-d[i,t]) * h[i,t]
+      ps[1,i,t,3] <- phiS[i,t] * d[i,t] * r[i,t]
+      ps[1,i,t,4] <- 1-phiS[i,t] + phiS[i,t]*d[i,t]*(1-r[i,t])
+      ps[2,i,t,1] <- 0
+      ps[2,i,t,2] <- phiDB[i,t] 
+      ps[2,i,t,3] <- 0
+      ps[2,i,t,4] <- (1-phiDB[i,t]) 
+      ps[3,i,t,1] <- 0
+      ps[3,i,t,2] <- 0
+      ps[3,i,t,3] <- phiLB[i,t]
+      ps[3,i,t,4] <- (1-phiLB[i,t])
+      ps[4,i,t,1] <- 0
+      ps[4,i,t,2] <- 0
+      ps[4,i,t,3] <- 0
+      ps[4,i,t,4] <- 1
+      
+      # Define probabilities of O(t) given S(t)
+      po[1,i,t,1] <- p[i,t]
+      po[1,i,t,2] <- 0
+      po[1,i,t,3] <- 0
+      po[1,i,t,4] <- 1-p[i,t]
+      po[2,i,t,1] <- 0
+      po[2,i,t,2] <- p[i,t]
+      po[2,i,t,3] <- 0
+      po[2,i,t,4] <- 1-p[i,t]
+      po[3,i,t,1] <- 0
+      po[3,i,t,2] <- 0
+      po[3,i,t,3] <- p[i,t]
+      po[3,i,t,4] <- 1-p[i,t]
+      po[4,i,t,1] <- 0
+      po[4,i,t,2] <- 0
+      po[4,i,t,3] <- 0
+      po[4,i,t,4] <- 1
+    } 
+  } 
+  
+  # Likelihood 
+  for (i in 1:nind){
+    z[i,f[i]] ~ dcat(y[i,f[i]])
+    for (t in (f[i]+1):n.occ){
+      z[i,t] ~ dcat(ps[z[i,t-1], i, t-1, ])
+      y[i,t] ~ dcat(po[z[i,t], i, t-1, ])
+    } 
+  } 
+}
+",fill = TRUE)
+sink()
+```
+
+
+### JAGS model fitting
+Then, we organize the simulated data in a format useable by 'JAGS' and fit the model using the jagsUI package.
+```{r JAGS run}
+jagsOutput <- jags( data,
+                    jagsInits,
+                    params_POIS,
+                    "natalDispModel_AlpineMarmots.jags",
+                    n.chains = 1,
+                    n.thin = 1,
+                    n.iter = 6000,
+                    n.burnin = 1000)
+
+
+jagsOutput$summary
+plot(jagsOutput)
+```
+
