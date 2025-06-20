@@ -9,7 +9,7 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-This vignette demonstrates the marmot dispersal capture-recapture model, as in "Estimation of age and sex-specific natal dispersal patterns of Alpine marmots from capture-recapture data." (Dupont *et al*, *submitted*). Specifically, we implement the two versions of the CR model used in the paper using nimble.
+This vignette demonstrates the marmot dispersal capture-recapture model, as in "Estimation of age and sex-specific natal dispersal patterns of Alpine marmots from capture-recapture data." ([Dupont *et al.*, 2022](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/1365-2656.13629). Specifically, we implement the two versions of the CR model used in the paper using [JAGS](https://mcmc-jags.sourceforge.io/), as well as a more efficient alternative using [NIMBLE](https://r-nimble.org/).
 
 
 ### Load Libraries
@@ -23,17 +23,17 @@ library(jagsUI)
 We simulate a capture-recapture data set that follows the `Natal Dispersal` model structure with the following parameter values
 ```{r sim parms}
 ## General parameters
-n.years <- 20					             ## Number of capture occasions
+n.years <- 20			   ## Number of capture occasions
 marked <- rep(20, n.years-1)       ## Numbers of new individuals captured each year
-n.individuals <- sum(marked)			 ## Total number of individuals captured
+n.individuals <- sum(marked)	   ## Total number of individuals captured
 f <- rep(1:length(marked), marked) ## Vector of first capture occasions
 
 ## CMR parameters
 tau <- 13                          ## mean dispersal distance
 phi <- c(0.85,0.95)                ## survival probabilities
-h <- 0.12					                 ## inheritance probability
-delta <- 0.4					             ## dispersal probability of dispersers
-p <- c(0.96,0.64)			             ## recapture probability
+h <- 0.12			   ## inheritance probability
+delta <- 0.4			   ## dispersal probability of dispersers
+p <- c(0.96,0.64)		   ## recapture probability
 ```
 
 We generate a study area map by randomly selecting 35 out of 60 possible sites and calculating the residency probabilities $r$ for each site.
