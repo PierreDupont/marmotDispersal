@@ -1,4 +1,4 @@
-# marmotDispersal
+# marmotDispersal [![DOI](https://zenodo.org/badge/321663061.svg)](https://doi.org/10.5281/zenodo.5708041)
 This repository contains the code and data associated with the article **"Efficient spatial multi-state capture-recapture model to study natal dispersal. An application to the Alpine marmot."** by Pierre Dupont, Dominique Allainé, Mariona Ferrandiz-Rovira and Roger Pradel:
 
 It is composed of:
